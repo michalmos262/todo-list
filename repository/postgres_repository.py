@@ -10,6 +10,7 @@ import os
 import jwt
 from werkzeug.security import generate_password_hash, check_password_hash
 from repository.abstract_repository import AbstractRepository
+from sdk.request.login_parameters import LoginRequestParameters
 from sdk.request.register_parameters import RegisterRequestParameters
 
 
@@ -58,11 +59,6 @@ class Todo(Base):
     # Relationship to Users
     user = relationship("User", back_populates="todos")
 
-
-def verify_password(stored_hash: str, password: str) -> bool:
-    """Verify a password against its hash"""
-    return check_password_hash(stored_hash, password)
-
 def create_jwt_token(user_id: int) -> str:
     payload = {
         'user_id': user_id,
@@ -71,24 +67,35 @@ def create_jwt_token(user_id: int) -> str:
     return jwt.encode(payload, 'your-secret-key', algorithm='HS256')
 
 class PostgresRepository(AbstractRepository):
-    def _is_user_exists_with_email(self, email: str) -> bool:
-        existing_user = Session.query(User).filter(User.email == email).first()
-        if (existing_user):
+    def _get_user_by_email(self, email: str) -> User | None:
+        return Session.query(User).filter(User.email == email).first()
+
+    def is_user_exist_by_email(self, email: str) -> bool:
+        if self._get_user_by_email(email):
             return True
         return False
 
     def create_user(self, register_parameters: RegisterRequestParameters) -> str:
-        password_hash = generate_password_hash(register_parameters.password)
-        # if self._is_user_exists_with_email(register_parameters.email):
+        try:
+            password_hash = generate_password_hash(register_parameters.password)
 
+            new_user = User(
+                name=register_parameters.name,
+                email=register_parameters.email,
+                password_hash=password_hash
+            )
 
-        new_user = User(
-            name=register_parameters.name,
-            email=register_parameters.email,
-            password_hash=password_hash
-        )
+            Session.add(new_user)
+            Session.commit()
 
-        Session.add(new_user)
-        Session.commit()
+            return create_jwt_token(new_user.id)
+        except Exception:
+            Session.rollback()
+            raise
 
-        return password_hash
+    def get_user_auth_token(self, login_parameters: LoginRequestParameters) -> str | None:
+        user = self._get_user_by_email(login_parameters.email)
+        if user:
+            if check_password_hash(pwhash=user.password_hash, password=login_parameters.password):
+                return create_jwt_token(user.id)
+        return None
